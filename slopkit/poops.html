@@ -797,7 +797,7 @@ let remoteSequence = 0, remoteFlushTimer = null, remoteEarlyAttached = false;
 
 function captureRemoteEvent(tag, extra) {
     if (tag !== "TEST" && CONCISE_SCREEN_SHOW[tag] !== 1
-        && !/^(POOPS-|LATCH-|TRIGGER-|WEBKIT-|IMPORT-|PREP-|MODULE-|RELOAD-|CORE-|MEM-)/.test(tag)
+        && !/^(POOPS-|LATCH-|TRIGGER-|WEBKIT-|IMPORT-|PREP-|MODULE-|RELOAD-|CORE-|MEM-|SCAN-|HUNT)/.test(tag)
         && tag !== "CHAIN-DEAD" && tag !== "PAGE-LEFT-MID-RUN"
         && tag !== "OFFSETS-READY"
         && REMOTE_DETAIL_SHOW[tag] !== 1
