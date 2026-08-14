@@ -64,8 +64,8 @@
   <a tabindex="0" id="startBtn" href="#">START HUNT</a>
   <pre id="log"></pre>
 
-<script src="rop.js?v=r3"></script>
-<script src="main.js?v=r3"></script>
+<script src="rop.js?v=r4"></script>
+<script src="main.js?v=r4"></script>
 <script>window.offsetsReady = new Promise(function (res, rej) {
     var s = document.querySelector('script[src^="../offsets/"]');
     if (!s) return rej(new Error("offsets script was never injected by main.js"));
@@ -79,8 +79,8 @@
 <script src="syscalls.js"></script>
 
 <script type="module">
-import { establishPrimitive, fakeCellReleased } from "./core.js?v=r3";
-import { installWindowP, pairStatus } from "./mem.js?v=r3";
+import { establishPrimitive, fakeCellReleased } from "./core.js?v=r4";
+import { installWindowP, pairStatus } from "./mem.js?v=r4";
 import { int64 } from "./int64.js";
 
 // ---------------------------------------------------------------- config
