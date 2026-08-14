@@ -307,6 +307,24 @@ function giveUp(reason) {
         reject(new Error(`core: gave up after ${attemptNumber} attempts (${reason})`));
 }
 
+function retryFreshPage(fallback) {
+    // 13.60: in-page retries pile ~100 MB per attempt and hit the browser
+    // memory cap ("mémoire système insuffisante"). Reload instead: every
+    // attempt gets a fresh heap. The count persists across reloads, capped
+    // at 40 so a bad run cannot loop forever.
+    try {
+        const k = "slopkit-reload-count";
+        const n = parseInt(sessionStorage.getItem(k) || "0", 10) + 1;
+        sessionStorage.setItem(k, String(n));
+        if (n <= 40) {
+            emit("RELOAD-RETRY", `n=${n}`);
+            setTimeout(() => { try { location.reload(); } catch { } }, 600);
+            return;
+        }
+    } catch (e) { }
+    fallback();
+}
+
 function failed() {
     if (ceilingReached()) {
         giveUp("attempt-ceiling");
@@ -315,11 +333,11 @@ function failed() {
     emit("AUTO-RETRY-AFTER-FAILURE", `attempt=${attemptNumber}`);
     stopped = false;
     retryScheduled = false;
-    setTimeout(() => {
+    retryFreshPage(() => {
         try { history.replaceState(null, ""); } catch { }
         attemptNumber++;
         startAttempt();
-    }, AUTO_RETRY_DELAY_MS);
+    });
 }
 
 function releaseAttemptAllocations() {
@@ -380,7 +398,7 @@ function scheduleSafeRetry(reason) {
     const nextAttempt = attemptNumber + 1;
     emit("AUTO-RETRY-SCHEDULED", `reason=${reason}-next-attempt=${nextAttempt}`);
     releaseAttemptAllocations();
-    setTimeout(() => {
+    retryFreshPage(() => {
         const candidateStillSafe = !candidateEverReturned
             || (zeroHeaderMiss && !candidateMutationStarted);
         if (!retrySafe || !candidateStillSafe
@@ -395,7 +413,7 @@ function scheduleSafeRetry(reason) {
 
         attemptNumber = nextAttempt;
         startAttempt();
-    }, Math.max(AUTO_RETRY_DELAY_MS, 750));
+    });
 }
 
 function finishEarlySafeAttempt(tag, extra, reason) {
@@ -1154,6 +1172,7 @@ function reportComposition() {
     emit("READ-PRIMITIVE-PASS", "arbitrary-read-established"
         + "-firmware-offsets-asserted=none");
 
+    try { sessionStorage.removeItem("slopkit-reload-count"); } catch { }
     try { history.replaceState(null, ""); } catch { }
 
     stopped = true;
