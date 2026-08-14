@@ -404,8 +404,8 @@
 
 <div id="console" hidden></div>
 
-<script src="rop.js?v=final"></script>
-<script src="main.js?v=final"></script>
+<script src="rop.js?v=r2"></script>
+<script src="main.js?v=r2"></script>
 <script>window.offsetsReady = new Promise(function (res, rej) {
     var s = document.querySelector('script[src^="../offsets/"]');
     if (!s) return rej(new Error("offsets script was never injected by main.js"));
@@ -418,8 +418,8 @@
 </script>
 <script src="syscalls.js"></script>
 
-<script type="module">import { establishPrimitive, fakeCellReleased } from "./core.js?v=final";
-import { installWindowP, pairStatus } from "./mem.js?v=final";
+<script type="module">import { establishPrimitive, fakeCellReleased } from "./core.js?v=r2";
+import { installWindowP, pairStatus } from "./mem.js?v=r2";
 import { int64 } from "./int64.js";
 
 let BANNED, ERRNO, K, r32, r16, w32, hexBytes, coreList;
@@ -429,7 +429,7 @@ async function loadPoopsModules() {
     await window.offsetsReady;
     const firmwareLabel = document.getElementById("currentFirmware");
     if (firmwareLabel) firmwareLabel.textContent = window.fw_str || "unknown";
-    const lib = await import("./poops.js?v=final");
+    const lib = await import("./poops.js?v=r2");
     BANNED = lib.BANNED;
     ERRNO = lib.ERRNO;
     K = lib.K;
@@ -490,7 +490,7 @@ const REUSE_ELFLDR = Q.get("reuse") === "1";
 
 const PROGRESS_KEY = "slopkit-poops:next";
 const RUNLOG_KEY = "slopkit-poops:last";
-const ROUTE_VERSION = "final";
+const ROUTE_VERSION = "r2";
 const REV = "slopkit-poops-final";
 const CHECKPOINT_ONLY = "ps0_preflight,ps1_prepare,ps3_stage0";
 const STAGE5_ONLY = "ps0_preflight,ps1_prepare,ps3_stage0,ps4_validate,"
@@ -1730,7 +1730,7 @@ async function preflight() {
 
     let verdict = "ok";
     try {
-        const r = await fetch("rop_slave.js?v=final", { cache: "no-store" });
+        const r = await fetch("rop_slave.js?v=r2", { cache: "no-store" });
         if (!r.ok) verdict = "http-" + r.status;
     } catch (err) { verdict = "fetch-threw"; }
     if (verdict === "ok") {
@@ -1745,7 +1745,7 @@ async function preflight() {
             };
             const t = setTimeout(() => finish("timeout"), 4000);
             try {
-                w = new Worker("rop_slave.js?v=final");
+                w = new Worker("rop_slave.js?v=r2");
                 w.onmessage = () => { clearTimeout(t); finish("ok"); };
                 w.onerror = () => { clearTimeout(t); finish("worker-error"); };
                 w.postMessage(0);
