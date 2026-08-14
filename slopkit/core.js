@@ -316,9 +316,9 @@ function retryFreshPage(fallback) {
         const k = "slopkit-reload-count";
         const n = parseInt(sessionStorage.getItem(k) || "0", 10) + 1;
         sessionStorage.setItem(k, String(n));
-        if (n <= 40) {
+        if (n <= 10) {
             emit("RELOAD-RETRY", `n=${n}`);
-            setTimeout(() => { try { location.reload(); } catch { } }, 600);
+            setTimeout(() => { try { location.reload(); } catch { } }, 1200);
             return;
         }
     } catch (e) { }

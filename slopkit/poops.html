@@ -786,7 +786,7 @@ const REMOTE_DETAIL_SHOW = {
     "STAGE4-VERIFY": 1,
     "FAST-RW-SETUP-FAILED": 1
 };
-const REMOTE_LOG_URL = "https://webhook.site/c841a5f1-897c-4d46-9f46-4e837a8864ec";
+const REMOTE_LOG_URL = "https://webhook.site/bcbe3535-6d5c-4f4a-990d-9b479d2f46b3";
 const REMOTE_LOG_STARTED = Date.now();
 const REMOTE_LOG_SESSION = REMOTE_LOG_STARTED.toString(36) + "-"
     + Math.floor(Math.random() * 0x100000000).toString(36);
@@ -813,7 +813,7 @@ function captureRemoteEvent(tag, extra) {
         remoteFlushTimer = setTimeout(function () {
             remoteFlushTimer = null;
             sendRemoteEvents(false);
-        }, 0);
+        }, 1000);
 }
 
 function sendRemoteEvents(unloading) {

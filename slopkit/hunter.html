@@ -121,7 +121,7 @@ function stage(text, cls) {
 // Minimal port of poops.html:789-856: buffer events, POST every ~2s, beacon
 // on pagehide. The Mac server prints them; if the console panics mid-hunt,
 // the last flushed event is the crash site.
-const REMOTE_LOG_URL = "https://webhook.site/c841a5f1-897c-4d46-9f46-4e837a8864ec";
+const REMOTE_LOG_URL = "https://webhook.site/bcbe3535-6d5c-4f4a-990d-9b479d2f46b3";
 const REMOTE_T0 = Date.now();
 const REMOTE_SESSION = REMOTE_T0.toString(36) + "-"
     + Math.floor(Math.random() * 0x100000000).toString(36);
@@ -161,7 +161,7 @@ function flushRemote(unloading) {
     } catch (e) { return Promise.resolve(); }
 }
 
-setInterval(function () { flushRemote(false); }, 250);
+setInterval(function () { flushRemote(false); }, 1000);
 window.addEventListener("pagehide", function () { flushRemote(true); });
 window.addEventListener("beforeunload", function () { flushRemote(true); });
 
