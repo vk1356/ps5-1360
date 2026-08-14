@@ -161,7 +161,7 @@ function flushRemote(unloading) {
     } catch (e) { return Promise.resolve(); }
 }
 
-setInterval(function () { flushRemote(false); }, 2000);
+setInterval(function () { flushRemote(false); }, 250);
 window.addEventListener("pagehide", function () { flushRemote(true); });
 window.addEventListener("beforeunload", function () { flushRemote(true); });
 
