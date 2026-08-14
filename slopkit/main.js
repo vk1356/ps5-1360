@@ -151,11 +151,26 @@ async function prepare(p) {
     let gadgets = {};
     let syscalls = {};
 
-    for (let gadget in wk_gadgetmap) {
-        gadgets[gadget] = libSceNKWebKitBase.add32(wk_gadgetmap[gadget]);
-    }
-    for (let sysc in syscall_map) {
-        syscalls[sysc] = libKernelBase.add32(syscall_map[sysc]);
+    if (window.fw_float >= 13.00
+        && typeof globalThis.dynFindTextRange === "function") {
+        // 13.x: the shipped offsets are a byte-identical 12.00 copy, so the
+        // static tables cannot be trusted.  Resolve syscall stubs and ROP
+        // gadgets by scanning the modules' own .text instead.
+        jbmark("DYNSCAN-WIRE", "fw=" + window.fw_str + "-next=libkernel-text");
+        const lkText = await globalThis.dynFindTextRange(libKernelBase);
+        syscalls = await globalThis.dynScanSyscalls(lkText.base, lkText.size);
+        jbmark("DYNSCAN-SYSCALLS", "count=" + Object.keys(syscalls).length);
+        const wkText = await globalThis.dynFindTextRange(libSceNKWebKitBase);
+        gadgets = await globalThis.dynFindGadgets(wkText.base, wkText.size,
+            globalThis.DYN_WK_GADGET_SPECS);
+        jbmark("DYNSCAN-GADGETS", "count=" + Object.keys(gadgets).length);
+    } else {
+        for (let gadget in wk_gadgetmap) {
+            gadgets[gadget] = libSceNKWebKitBase.add32(wk_gadgetmap[gadget]);
+        }
+        for (let sysc in syscall_map) {
+            syscalls[sysc] = libKernelBase.add32(syscall_map[sysc]);
+        }
     }
 
     let nogc = [];
@@ -256,7 +271,7 @@ async function prepare(p) {
 
     }
 
-    let worker = new Worker("rop_slave.js?v=r4");
+    let worker = new Worker("rop_slave.js?v=r5");
 
     jbmark("PREP-PRE-WORKER-AWAIT", "next=await-wait_for_worker()-first-yield");
     await wait_for_worker();
@@ -371,4 +386,4 @@ async function prepare(p) {
 let fwScript = document.createElement('script');
 document.body.appendChild(fwScript);
 
-fwScript.setAttribute('src', `../offsets/${window.fw_str}.js?v=r4`);
+fwScript.setAttribute('src', `../offsets/${window.fw_str}.js?v=r5`);

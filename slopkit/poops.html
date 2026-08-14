@@ -404,8 +404,9 @@
 
 <div id="console" hidden></div>
 
-<script src="rop.js?v=r4"></script>
-<script src="main.js?v=r4"></script>
+<script src="rop.js?v=r5"></script>
+<script src="main.js?v=r5"></script>
+<script src="dynscan.js?v=r5"></script>
 <script>window.offsetsReady = new Promise(function (res, rej) {
     var s = document.querySelector('script[src^="../offsets/"]');
     if (!s) return rej(new Error("offsets script was never injected by main.js"));
@@ -418,8 +419,8 @@
 </script>
 <script src="syscalls.js"></script>
 
-<script type="module">import { establishPrimitive, fakeCellReleased } from "./core.js?v=r4";
-import { installWindowP, pairStatus } from "./mem.js?v=r4";
+<script type="module">import { establishPrimitive, fakeCellReleased } from "./core.js?v=r5";
+import { installWindowP, pairStatus } from "./mem.js?v=r5";
 import { int64 } from "./int64.js";
 
 let BANNED, ERRNO, K, r32, r16, w32, hexBytes, coreList;
@@ -429,7 +430,7 @@ async function loadPoopsModules() {
     await window.offsetsReady;
     const firmwareLabel = document.getElementById("currentFirmware");
     if (firmwareLabel) firmwareLabel.textContent = window.fw_str || "unknown";
-    const lib = await import("./poops.js?v=r4");
+    const lib = await import("./poops.js?v=r5");
     BANNED = lib.BANNED;
     ERRNO = lib.ERRNO;
     K = lib.K;
@@ -490,7 +491,7 @@ const REUSE_ELFLDR = Q.get("reuse") === "1";
 
 const PROGRESS_KEY = "slopkit-poops:next";
 const RUNLOG_KEY = "slopkit-poops:last";
-const ROUTE_VERSION = "r4";
+const ROUTE_VERSION = "r5";
 const REV = "slopkit-poops-final";
 const CHECKPOINT_ONLY = "ps0_preflight,ps1_prepare,ps3_stage0";
 const STAGE5_ONLY = "ps0_preflight,ps1_prepare,ps3_stage0,ps4_validate,"
@@ -797,7 +798,7 @@ let remoteSequence = 0, remoteFlushTimer = null, remoteEarlyAttached = false;
 
 function captureRemoteEvent(tag, extra) {
     if (tag !== "TEST" && CONCISE_SCREEN_SHOW[tag] !== 1
-        && !/^(POOPS-|LATCH-|TRIGGER-|WEBKIT-|IMPORT-|PREP-|MODULE-|RELOAD-|CORE-|MEM-|SCAN-|HUNT)/.test(tag)
+        && !/^(POOPS-|LATCH-|TRIGGER-|WEBKIT-|IMPORT-|PREP-|MODULE-|RELOAD-|CORE-|MEM-|SCAN-|HUNT|DYNSCAN-)/.test(tag)
         && tag !== "CHAIN-DEAD" && tag !== "PAGE-LEFT-MID-RUN"
         && tag !== "OFFSETS-READY"
         && REMOTE_DETAIL_SHOW[tag] !== 1
