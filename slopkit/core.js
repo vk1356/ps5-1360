@@ -318,7 +318,7 @@ function retryFreshPage(fallback) {
         sessionStorage.setItem(k, String(n));
         if (n <= 10) {
             emit("RELOAD-RETRY", `n=${n}`);
-            setTimeout(() => { try { location.reload(); } catch { } }, 1200);
+            setTimeout(() => { try { location.reload(); } catch { } }, 3000);
             return;
         }
     } catch (e) { }
