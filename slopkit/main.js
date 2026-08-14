@@ -96,9 +96,28 @@ async function prepare(p) {
                 break;
             }
         }
-        if (libSceNKWebKitBase === null)
-            throw new Error("no host-constructor candidate gave a valid base (ctor=0x"
-                + ctor.toString(16) + ")");
+        if (libSceNKWebKitBase === null) {
+            // 13.x fallback: no static ctor offset matches — scan backwards from
+            // the leaked ctor code pointer for the module's in-memory ELF header
+            // (PS5 modules keep their ELF header mapped, like PS4).
+            jbmark("WEBKIT-BASE-SCAN-START", "ctor=0x" + ctor.toString(16));
+            let page = ctor - (ctor % 0x1000);
+            let found = 0;
+            for (let i = 0; i < 0x400 && page >= 0x800000000; i++, page -= 0x1000) {
+                const a = new int64(page % 0x100000000, Math.floor(page / 0x100000000));
+                if (p.read4(a) === 0x464c457f) { found = page; break; }
+                if ((i & 0x3f) === 0)
+                    jbmark("WEBKIT-BASE-SCAN", "page=0x" + page.toString(16));
+            }
+            if (found) {
+                libSceNKWebKitBase = new int64(found % 0x100000000, Math.floor(found / 0x100000000));
+                jbmark("WEBKIT-BASE-SCAN-HIT", "base=0x" + found.toString(16)
+                    + "-ctorOff=0x" + (ctor - found).toString(16));
+            } else {
+                throw new Error("no host-constructor candidate gave a valid base (ctor=0x"
+                    + ctor.toString(16) + ")");
+            }
+        }
     } else {
         jbmark("WEBKIT-BASE-VTABLE", "fw=" + window.fw_str
             + "-ctor=" + (typeof globalThis.__ps5NativeCtor === "number"
@@ -107,6 +126,11 @@ async function prepare(p) {
                 ? OFFSET_wk_host_constructor_candidates.length : "none"));
         libSceNKWebKitBase = p.read8(textAreaVtable).sub32(OFFSET_wk_vtable_first_element);
     }
+
+    jbmark("IMPORT-RAW", "memset@0x" + OFFSET_wk_memset_import.toString(16)
+        + "=0x" + p.read8(libSceNKWebKitBase.add32(OFFSET_wk_memset_import)).toString()
+        + "-stkchk@0x" + OFFSET_wk___stack_chk_guard_import.toString(16)
+        + "=0x" + p.read8(libSceNKWebKitBase.add32(OFFSET_wk___stack_chk_guard_import)).toString());
 
     let libSceLibcInternalBase = p.read8(libSceNKWebKitBase.add32(OFFSET_wk_memset_import));
     libSceLibcInternalBase.sub32inplace(OFFSET_lc_memset);
